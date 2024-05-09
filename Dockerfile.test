@@ -1,0 +1,7 @@
+FROM healthchk as healthchk
+
+FROM busybox:stable
+
+COPY --from=healthchk /healthchk /
+
+ENTRYPOINT ["/healthchk"]

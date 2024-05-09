@@ -1,0 +1,180 @@
+name: Build, Test and Release
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE
+  pull_request:
+
+jobs:
+
+  linux:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.bump.outputs.bumped }}
+      changed-files: ${{ steps.bump.outputs.changed-files }}
+      new-version: ${{ steps.bump.outputs.new-version }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/setup-v-action@v2
+    - uses: prantlf/bump-version-action@v2
+      if: github.ref_name == 'master'
+      id: bump
+      with:
+        bump-files: healthchk.v
+    - uses: prantlf/shelve-changes-action@v2
+    - run: make RELEASE=1
+    - uses: prantlf/shelve-output-action@v3
+      if: ${{ steps.bump.outputs.bumped == 'true' }}
+
+  linux-arm:
+    if: ${{ github.ref_name == 'master' && needs.linux.outputs.changed == 'true' }}
+    needs:
+      - linux
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/setup-v-action@v2
+    - if: ${{ needs.linux.outputs.changed == 'true' }}
+      uses: prantlf/unshelve-changes-action@v2
+      with:
+        files: ${{ needs.linux.outputs.changed-files }}
+        discard-shelf: false
+    - run: |
+        sudo apt-get update
+        sudo apt-get install gcc gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+    - run: make build RELEASE=1 LINUX_ARM=1
+    - uses: prantlf/shelve-output-action@v3
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+      with:
+        arch: arm64
+
+  macos:
+    needs:
+      - linux
+    runs-on: macos-13
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/setup-v-action@v2
+    - uses: prantlf/unshelve-changes-action@v2
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+      with:
+        files: ${{ needs.linux.outputs.changed-files }}
+        discard-shelf: false
+    - run: make RELEASE=1
+    - uses: prantlf/shelve-output-action@v3
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+
+  macos-arm:
+    if: ${{ github.ref_name == 'master' && needs.linux.outputs.changed == 'true' }}
+    needs:
+      - linux
+    runs-on: macos-13
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/setup-v-action@v2
+    - uses: prantlf/unshelve-changes-action@v2
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+      with:
+        files: ${{ needs.linux.outputs.changed-files }}
+        discard-shelf: false
+    - run: make build RELEASE=1 MACOS_ARM=1
+    - uses: prantlf/shelve-output-action@v3
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+      with:
+        arch: arm64
+
+  windows:
+    if: ${{ github.ref_name == 'master' && needs.linux.outputs.changed == 'true' }}
+    needs:
+      - linux
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/setup-v-action@v2
+    - uses: prantlf/unshelve-changes-action@v2
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+      with:
+        files: ${{ needs.linux.outputs.changed-files }}
+        discard-shelf: false
+    - run: sudo apt-get install gcc-mingw-w64-x86-64
+    - run: make build RELEASE=1 WINDOWS=1
+    - uses: prantlf/shelve-output-action@v3
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+      with:
+        os: windows
+
+  docker:
+    needs:
+      - linux
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/unshelve-changes-action@v2
+      if: ${{ needs.linux.outputs.changed == 'true' }}
+      with:
+        files: ${{ needs.linux.outputs.changed-files }}
+        discard-shelf: false
+    - uses: docker/build-push-action@v5
+      with:
+        push: false
+
+  release:
+    if: ${{ github.ref_name == 'master' && needs.linux.outputs.changed == 'true' }}
+    needs:
+      - linux
+      - linux-arm
+      - macos
+      - macos-arm
+      - windows
+      - docker
+    runs-on: macos-13
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/unshelve-changes-action@v2
+      with:
+        files: ${{ needs.linux.outputs.changed-files }}
+        discard-shelf: false
+    - uses: prantlf/unshelve-output-action@v6
+    - uses: prantlf/finish-release-action@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-publish:
+    if: ${{ github.ref_name == 'master' && needs.linux.outputs.changed == 'true' }}
+    needs:
+      - linux
+      - release
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: prantlf/unshelve-changes-action@v2
+      with:
+        files: ${{ needs.linux.outputs.changed-files }}
+    - uses: docker/metadata-action@v5
+      id: meta
+      with:
+        images: |
+          ghcr.io/prantlf/healthchk
+          prantlf/healthchk
+        tags: |
+          type=semver,pattern={{version}},value=v${{ needs.linux.outputs.new-version }}
+          type=semver,pattern={{major}}.{{minor}},value=v${{ needs.linux.outputs.new-version }}
+          type=semver,pattern={{major}},value=v${{ needs.linux.outputs.new-version }}
+    - uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USER }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    - uses: docker/build-push-action@v5
+      with:
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
