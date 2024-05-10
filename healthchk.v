@@ -13,7 +13,7 @@ mut:
 	verbose   bool
 }
 
-const version = '0.0.1'
+const version = '0.1.0'
 
 const help = 'usage: healthchk [option ...] <url>
 options:
