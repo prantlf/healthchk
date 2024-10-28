@@ -1,4 +1,4 @@
-FROM prantlf/vlang as builder
+FROM prantlf/vlang AS builder
 
 WORKDIR /src
 COPY . .

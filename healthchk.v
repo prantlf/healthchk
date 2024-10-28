@@ -94,8 +94,8 @@ fn fail(err IError) {
 
 fn check(opts &Opts, back chan &Response) {
 	mut req := Request{
-		method: opts.method
-		url: opts.url
+		method:         opts.method
+		url:            opts.url
 		allow_redirect: opts.redirects
 	}
 	res := req.do() or {

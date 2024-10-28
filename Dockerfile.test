@@ -1,4 +1,4 @@
-FROM healthchk as healthchk
+FROM healthchk AS healthchk
 
 FROM busybox:stable
 
